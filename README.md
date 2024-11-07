@@ -14,3 +14,6 @@
 ./update.sh udagram-Server udagram.yml udagram-parameters.json aws-user-profile
 
 
+## URL
+http://udagra-webap-pkdjagln0fee-1159133205.us-east-1.elb.amazonaws.com/
+

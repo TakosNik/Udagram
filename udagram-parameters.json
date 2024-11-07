@@ -1,23 +1,6 @@
 [
 	{
-		"ParameterKey": "Project",
-		"ParameterValue": "UdagramProject"
-	},
-	{
-		"ParameterKey": "InstanceType",
-		"ParameterValue": "t3.medium"
-	},
-	{
-		"ParameterKey": "KeyPairName",
-		"ParameterValue": "vockey"
-	},
-	{
-        "ParameterKey": "VolumeSize",
-        "ParameterValue": "10"
-    },
-	{
-		"ParameterKey": "S3BucketName",
-		"ParameterValue": "udagram-bucket-23"
+		"ParameterKey": "EnvironmentName",
+		"ParameterValue": "Udagram"
 	}
-	
 ]

@@ -1,228 +1,164 @@
 Description: CD12352 - Infrastructure as Code Project - Udagram
 
-
 Parameters:
-  KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
-
-  S3BucketName:
+  EnvironmentName:
+    Description: Project name used for tagging resources
     Type: String
-    Description: S3 bucket name to store static assets
-
-  Project:
-    Description: Project name, used for resources tagging
-    Type: String
-
-  WebServerImageId:
-    Description: Web serve image id
-    Type: String
-    Default: ami-01e3c4a339a264cc9
-
-  VolumeSize:
-    Description: Web server disk volume size
-    Type: String
-    Default: 10
-
-  InstanceType:
-    AllowedValues:
-      - t2.medium
-      - t2.large
-      - t3.medium
-      - t3.large
-      - t3.xlarge
-      - m1.medium
-      - m1.large
-      - m1.xlarge
-      - m2.xlarge
-      - m2.2xlarge
-      - m2.4xlarge
-      - m3.medium
-      - m3.large
-      - m3.xlarge
-      - m3.2xlarge
-      - m4.large
-      - m4.xlarge
-      - m4.2xlarge
-      - m4.4xlarge
-      - m4.10xlarge
-    ConstraintDescription: Web server instance type. t2.nano - dev instance, t3.medium - default
-    Default: t3.medium
-    Description: WebServer EC2 instance type
-    Type: String
-
-  CPUUsagePercentPolicyTargetValue:
-    Description: Average CPU utilization
-    Type: String
-    Default: 75.0
-
-  ALBRequestCompleteCountTargetValue:
-    Description: Number of requests completed per target in an Application Load Balancer target group.
-                How many requests the application can handle per instance
-    Type: String
-    Default: 3
 
 Resources:
-
-  # Web server Role
-  UdacityS3ReadOnlyEC2:
+  # VPC and subnet configuration
+  WebAppInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
+      RoleName: !Sub "${EnvironmentName}-web-servers"
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
-          -
-            Effect: "Allow"
-            Principal:
-              Service:
-                - "ec2.amazonaws.com"
-            Action:
-              - "sts:AssumeRole"
+        - Effect: 'Allow'
+          Principal:
+            Service:
+            - 'ec2.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
       Path: "/"
-
-
-  ProfileWithRolesForApp:
+  WebAppInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
-      Path: "/"
+      Path: '/'
       Roles:
-        - !Ref UdacityS3ReadOnlyEC2
+      - !Ref WebAppInstanceRole
 
-  WebAppServer:
-    Type: AWS::AutoScaling::LaunchConfiguration
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          apt-get update -y
-          apt-get install unzip awscli -y
-          apt-get install apache2 -y
-          systemctl start apache2.service
-          cd /var/www/html
-          aws s3 cp s3://udacity-demo-1/udacity.zip .
-          unzip -o udacity.zip
-      ImageId: !Ref WebServerImageId
-      IamInstanceProfile: !Ref ProfileWithRolesForApp
-      SecurityGroups:
-      - Fn::ImportValue:
-          !Sub "${Project}-AppSecurityGroupID"
-      InstanceType: !Ref InstanceType
-      BlockDeviceMappings:
-      - DeviceName: "/dev/sdk"
-        Ebs:
-          VolumeSize: !Ref VolumeSize
-
-
-  # Target group for Application Load Balancer or Network Load Balancer.
-  WebAppTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      HealthCheckIntervalSeconds: 10
-      HealthCheckPath: / # physical file path check.
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 7
-      HealthyThresholdCount: 2
-      Port: 80
-      Protocol: HTTP
-      UnhealthyThresholdCount: 5
+      GroupDescription: Allow http access to our load balancer
       VpcId:
         Fn::ImportValue:
-          Fn::Sub: "${Project}-VPCID"
-
-  # EC2 Auto Scaling group
-  WebAppServerGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
-    Properties:
-      # Private Subnets
-      VPCZoneIdentifier:
-        - Fn::ImportValue: !Sub ${Project}-Private-Subnet-IDs
-      LaunchConfigurationName: !Ref WebAppServer
-      MinSize: '2'
-      MaxSize: '4'
-      TargetGroupARNs:
-      - Ref: WebAppTargetGroup
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: EC2-Instance
-          PropagateAtLaunch: true
-        - Key: Project
-          Value: !Ref Project
-          PropagateAtLaunch: true
+          Value: !Sub "${EnvironmentName}-LB-SecurityGroup"
 
+  WebserverSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http access to our hosts from the LB Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName}-Webserver-SecurityGroup"
 
-  # Specifies an Application Load Balancer or a Network Load Balancer
-  WebAppLoadBalancer:
+  # LaunchConfiguration and Autoscaling Configuration
+  WebAppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateName: !Sub "${EnvironmentName}-web-servers"
+      LaunchTemplateData:
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            apt-get update -y
+            apt-get install unzip awscli -y
+            apt-get install apache2 -y
+            systemctl start apache2.service
+            cd /var/www/html
+            aws s3 cp s3://udagram-bucket-23/index.html
+        ImageId: ami-0557a15b87f6559cf
+        SecurityGroupIds:
+          - !Ref WebserverSecurityGroup
+        InstanceType: t2.micro
+        BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+        IamInstanceProfile:
+          Name: !Ref WebAppInstanceProfile
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+      - Fn::ImportValue: 
+          !Sub "${EnvironmentName}-PRIV-NETS"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebAppLaunchTemplate
+        Version: !GetAtt WebAppLaunchTemplate.LatestVersionNumber
+      MinSize: '2'
+      DesiredCapacity: '2'
+      MaxSize: '3'
+      TargetGroupARNs:
+      - Ref: WebAppTargetGroup
+
+  # Load Balancer Configuration
+  WebAppLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Subnets:
-      - Fn::ImportValue: !Sub ${Project}-Public-Subnet-1-ID
-      - Fn::ImportValue: !Sub ${Project}-Public-Subnet-2-ID
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
       SecurityGroups:
-      - Fn::ImportValue: !Sub ${Project}-LBSecurityGroupID
-      Tags:
-        - Key: Name
-          Value: Load Balancer
-        - Key: Project
-          Value: !Ref Project
-
-  # Specifies a listener for an Application Load Balancer or Network Load Balancer
-  LoadBalancerListener:
+      - Ref: LoadBalancerSecurityGroup
+  Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
       - Type: forward
-        TargetGroupArn: !Ref WebAppTargetGroup
-      LoadBalancerArn: !Ref WebAppLoadBalancer
+        TargetGroupArn:
+          Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
       Port: '80'
       Protocol: HTTP
 
-  LoadBalancerListenerRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+  ALBListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref 'WebAppTargetGroup'
+        Conditions:
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref 'Listener'
+        Priority: 1
+  # TargetGroup
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Actions:
-      - Type: forward
-        TargetGroupArn: !Ref WebAppTargetGroup
-      Conditions:
-      - Field: path-pattern
-        Values: [/]
-      ListenerArn: !Ref LoadBalancerListener
-      Priority: 1
-
-
-  WebServerCPUPolicy:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AutoScalingGroupName: !Ref WebAppServerGroup
-      PolicyType: TargetTrackingScaling
-      TargetTrackingConfiguration:
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ASGAverageCPUUtilization
-        TargetValue: !Ref CPUUsagePercentPolicyTargetValue
-
-  WebServerRequestCountPolicy:
-    Type: AWS::AutoScaling::ScalingPolicy
-    Properties:
-      AutoScalingGroupName: !Ref WebAppServerGroup
-      PolicyType: TargetTrackingScaling
-      TargetTrackingConfiguration:
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ALBRequestCountPerTarget
-          ResourceLabel: !Join
-            - '/'
-            - - !GetAtt WebAppLoadBalancer.LoadBalancerFullName
-              - !GetAtt WebAppTargetGroup.TargetGroupFullName
-        TargetValue: !Ref ALBRequestCompleteCountTargetValue
-
-
-Outputs:
-
-  DNS:
-    Description: The website URL
-    Value:
-      !Sub
-        - 'http://${DNSName}'
-        - {DNSName: !GetAtt 'WebAppLoadBalancer.DNSName'}
-    Export:
-      Name: !Sub "${Project}-SiteURL"
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+Outputs: 
+    WebAppLoadBalancerDnsName: 
+        Description: The DNS name of the WebApp Load Balancer that can be used in a browser to access the deployed services.
+        Value: !Sub "http://${WebAppLB.DNSName}"
