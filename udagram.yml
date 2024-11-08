@@ -84,8 +84,23 @@ Resources:
             apt-get install unzip awscli -y
             apt-get install apache2 -y
             systemctl start apache2.service
-            cd /var/www/html
-            aws s3 cp s3://udagram-bucket-23/index.html
+            cat <<EOF > /var/www/html/index.html
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Udagram</title>
+            </head>
+            <body>
+              <h1>It works! Udagram, Udacity</h1>
+            </body>
+            </html>
+            EOF
+            
+            chmod 644 /var/www/html/index.html
+            chown www-data:www-data /var/www/html/index.html
+            systemctl restart apache2
         ImageId: ami-0557a15b87f6559cf
         SecurityGroupIds:
           - !Ref WebserverSecurityGroup
