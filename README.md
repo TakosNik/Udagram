@@ -15,5 +15,5 @@
 
 
 ## URL
-http://udagra-webap-pkdjagln0fee-1159133205.us-east-1.elb.amazonaws.com/
+http://udagra-webap-ex08kspqnjyv-895440016.us-east-1.elb.amazonaws.com/
 
